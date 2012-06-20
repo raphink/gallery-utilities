@@ -1,0 +1,212 @@
+#!/bin/bash
+#
+# Create catalog from DVD
+#
+
+
+# DEFAULTS
+CATALOGDIR="$HOME/Pictures/DVD/catalog"
+DISKDIR="/media/cdrom"
+SIZE="400x400"
+DISKNAME=
+EJECT="no"
+UPDATE="no"
+PURGE="no"
+VERBOSE=0
+
+
+# Functions
+############
+
+usage() {
+   cat << EOF
+Usage: $0 [-c <catalogdir>][-d <diskdir>][-s <image_size>][-e][-u]  -n <diskname>"
+   -c <catalogdir>: specify output catalog directory, default is $CATALOGDIR
+   -d <diskdir>   : specify input disk directory, default is $DISKDIR
+   -s <image_size>: specify image size, default is $SIZE
+   -e             : eject disk after dump
+   -u             : update only
+   -p             : purge thumbnails when original is not present anymore
+   -v             : be more verbose
+EOF
+}
+
+
+make_image_thumb() {
+   local input="$1" output="$2"
+
+   convert -size "$SIZE" "$input" -thumbnail "$SIZE>" -bordercolor black -border 200 -gravity center \
+           -crop $SIZE+0+0 +repage "$output" 2>/dev/null
+
+   return $?
+}
+
+
+make_movie_thumb() {
+   local input="$1" output="$2" tmpdir=$(mktemp -d "/tmp/mplayer.XXXXXX")
+
+   mplayer "$input" -frames 2 -nosound -vo jpeg:outdir=$tmpdir -slave >/dev/null 2>/dev/null
+   if [ -s "$tmpdir/00000002.jpg" ]; then
+      cp "$tmpdir/00000002.jpg" "$output"
+      rm -rf "$tmpdir"
+      return 0
+   else
+      # Failed
+      rm -rf "$tmpdir"
+      return 1
+   fi
+}
+
+
+
+make_thumb() {
+   local input="$1" catadir="$2" err="0"
+
+   new_f=$(basename "$input")
+
+   case $input in
+      *.JPG|*.jpg|*.png|*.PNG|*.TIFF|*.tiff|*.TIF|*.tif)
+         if ! [[ "x$UPDATE" = "xyes" && -s "$catadir/$new_f" ]]; then
+            make_image_thumb "$input" "$catadir/$new_f"
+            err="$?"
+         fi
+         ;;
+      *.AVI|*.avi|*.MTS|*.mts|*.MPG|*.mpg|*.MPEG|*.mpeg|*.MOV|*.mov|*.mp4|*.3GP|*.3gp)
+         if ! [[ "x$UPDATE" = "xyes" && -s "$catadir/$new_f.jpg" ]]; then
+            # Remove previous thumbnail if it existed
+            rm -f "$catadir/$new_f"
+            make_movie_thumb "$input" "$catadir/$new_f.jpg"
+            err="$?"
+         fi
+         ;;
+      *)
+         touch "$catadir/$new_f"
+         ;;
+   esac
+
+   if [ $err -ne 0 ]; then
+      touch "$catadir/$new_f"
+   fi
+
+   return 0
+}
+
+
+
+purge_file() {
+   local input="$1" catadir="$2" canondir="$3"
+
+   fname=$(basename "$input")
+   fname_noext=${fname%\.*}
+
+   [[ $VERBOSE -ge 2 ]] && echo "Checking file $canondir/$fname"
+
+   case $fname_noext in
+      *.AVI|*.avi|*.MTS|*.mts|*.MPG|*.mpg|*.MPEG|*.mpeg|*.MOV|*.mov|*.mp4|*.3GP|*.3gp)
+         if [ ! -e "$canondir/$fname_noext" ]; then
+            [[ $VERBOSE -ge 1 ]] && echo "File $canondir/$fname_noext does not exist, removing $catadir/$fname"
+            rm -f "$catadir/$fname"
+         fi
+         ;;
+      *)
+         if [ ! -e "$canondir/$fname" ]; then
+            [[ $VERBOSE -ge 1 ]] && echo "File $canondir/$fname does not exist, removing $catadir/$fname"
+            rm -f "$catadir/$fname"
+         fi
+         ;;
+   esac
+
+   return 0
+}
+
+
+while getopts c:d:s:n:eupv myoption
+do
+   case $myoption in
+      c)
+         CATALOGDIR=$OPTARG
+         ;;
+      d)
+	 DISKDIR=$OPTARG
+         ;;
+      s)
+         SIZE=$OPTARG
+         ;;
+      n)
+         DISKNAME=$OPTARG
+         ;;
+      e)
+         EJECT="yes"
+         ;;
+      u)
+         UPDATE="yes"
+         ;;
+      p)
+         PURGE="yes"
+         ;;
+      v)
+         let VERBOSE=$VERBOSE+1
+         ;;
+      \?)
+         usage
+         exit 1
+         ;;		
+   esac
+done
+
+
+if [ -z "$DISKNAME" ]; then
+   echo "E: You must provide a disk name"
+   usage
+   exit 1
+fi
+
+mkdir -p "$CATALOGDIR"
+
+
+
+OLDIFS=$IFS
+export IFS='
+'
+dirs=$(find "$DISKDIR" -type d)
+
+for d in $dirs; do
+   # Get canonical paths
+   canondir=$(readlink -m "$d")
+   reldir=${d##$DISKDIR}
+   catadir=$(readlink -m "$CATALOGDIR/$DISKNAME/$reldir")
+   mkdir -p "$catadir"
+   [[ $VERBOSE -ge 1 ]] && echo "Converting images from $canondir to $catadir"
+
+   files=$(find "$canondir" -maxdepth 1 -type f)
+   for f in $files; do
+      make_thumb "$f" "$catadir"
+   done
+
+
+   catafiles=$(find "$catadir" -maxdepth 1 -type f)
+   # Do purge if requested
+   if [ "x$PURGE" = "xyes" ]; then
+      [[ $VERBOSE -ge 1 ]] && echo "Checking for images to purge from $catadir"
+
+      catafiles=$(find "$catadir" -maxdepth 1 -type f)
+
+      for f in $catafiles; do
+         purge_file "$f" "$catadir" "$canondir"
+      done
+   fi
+   
+done
+
+
+
+if [ "x$EJECT" = "xyes" ]; then
+   # Wait a bit
+   cd -
+   sleep "10s"
+   eject "$DISKDIR"
+fi
+
+
+
+
