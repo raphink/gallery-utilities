@@ -13,3 +13,12 @@ while read m d num; do
   test -d "$dir" || mkdir $dir
   mv $file $dir/
 done < <(ls *.MOV | sed -n 's@P\([0-9]\{1,2\}\)\([0-9]\{2\}\)\([0-9]\{4\}\)\.MOV@\1 \2 \3@p')
+
+# Failed pictures
+while read m d num; do
+  month=$(printf '%02d' $m)
+  dir="${YEAR}-${month}-${d}"
+  file="P${m}${d}${num}.JPG"
+  test -d "$dir" || mkdir $dir
+  mv $file $dir/
+done < <(ls *.JPG | sed -n 's@P\([0-9]\{1,2\}\)\([0-9]\{2\}\)\([0-9]\{4\}\)\.JPG@\1 \2 \3@p')
